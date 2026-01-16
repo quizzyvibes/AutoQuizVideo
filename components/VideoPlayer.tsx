@@ -75,6 +75,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const currentAudioTrackRef = useRef<{slideIndex: number, type: 'question' | 'answer'} | null>(null);
   const lastTickTimeRef = useRef<number>(-1); 
 
+  // Randomize outro style on mount/slide change (Limit to 0 and 1 to remove 'Watch Next' variant)
+  const outroVariantRef = useRef<number>(0);
+  useEffect(() => {
+      outroVariantRef.current = Math.floor(Math.random() * 2);
+  }, [slides]);
+
   // 1. Initialize Audio Context & Preload Assets
   useEffect(() => {
     let cancelled = false;
@@ -138,18 +144,29 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const newTimings: SlideTiming[] = [];
       let accumulatedTime = 0;
 
-      const decodePCM = (arrayBuffer: ArrayBuffer) => {
-        try {
-            const pcmData = new Int16Array(arrayBuffer);
-            const buffer = ctx.createBuffer(1, pcmData.length, 24000);
-            const channel = buffer.getChannelData(0);
-            for (let j = 0; j < pcmData.length; j++) {
-                channel[j] = pcmData[j] / 32768.0;
+      const decodeAudio = async (arrayBuffer: ArrayBuffer, format: 'pcm' | 'mp3' = 'pcm') => {
+        if (format === 'mp3') {
+            try {
+                // Decode MP3 using standard browser API
+                return await ctx.decodeAudioData(arrayBuffer.slice(0));
+            } catch (e) { 
+                console.error("MP3 Decode error", e);
+                return null; 
             }
-            return buffer;
-        } catch(e) {
-            console.error("PCM Decode error", e);
-            return null;
+        } else {
+            try {
+                // Manually decode PCM (Float32 or Int16) from Gemini
+                const pcmData = new Int16Array(arrayBuffer);
+                const buffer = ctx.createBuffer(1, pcmData.length, 24000);
+                const channel = buffer.getChannelData(0);
+                for (let j = 0; j < pcmData.length; j++) {
+                    channel[j] = pcmData[j] / 32768.0;
+                }
+                return buffer;
+            } catch(e) {
+                console.error("PCM Decode error", e);
+                return null;
+            }
         }
       };
 
@@ -161,7 +178,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           let aDur = 2000;
 
           if (slide.questionAudio) {
-              const buffer = decodePCM(slide.questionAudio);
+              const buffer = await decodeAudio(slide.questionAudio, slide.audioFormat || 'pcm');
               if (buffer) {
                   questionBuffersRef.current.set(i, buffer);
                   qDur = buffer.duration * 1000;
@@ -169,7 +186,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           }
 
           if (slide.answerAudio) {
-              const buffer = decodePCM(slide.answerAudio);
+              const buffer = await decodeAudio(slide.answerAudio, slide.audioFormat || 'pcm');
               if (buffer) {
                   answerBuffersRef.current.set(i, buffer);
                   aDur = buffer.duration * 1000;
@@ -271,8 +288,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           source.start();
           return;
       }
-      
-      // Default oscillators removed as per request
   };
 
 
