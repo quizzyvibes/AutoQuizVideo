@@ -1,0 +1,5 @@
+{
+  "name": "AutoQuiz Studio",
+  "description": "A fully automated AI video generator that creates professional-grade quiz videos with voiceovers, imagery, and animations using Gemini models.",
+  "requestFramePermissions": []
+}
