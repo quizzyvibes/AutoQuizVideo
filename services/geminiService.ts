@@ -94,6 +94,34 @@ async function withRetry<T>(operation: () => Promise<T>, retries = 3, baseDelay 
   throw lastError;
 }
 
+// --- ELEVENLABS INTEGRATION ---
+
+const generateElevenLabsAudio = async (text: string, apiKey: string, voiceId: string, modelId: string = "eleven_multilingual_v2"): Promise<ArrayBuffer> => {
+    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+        method: 'POST',
+        headers: {
+            'xi-api-key': apiKey,
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            text: text,
+            model_id: modelId, 
+            voice_settings: {
+                stability: 0.5,
+                similarity_boost: 0.75
+            }
+        })
+    });
+
+    if (!response.ok) {
+        let errorBody = "";
+        try { errorBody = await response.text(); } catch (e) {}
+        throw new Error(`ElevenLabs API Error (${response.status}): ${errorBody}`);
+    }
+
+    return await response.arrayBuffer();
+};
+
 export const generateQuizScript = async (
     topic: string, 
     distribution: { easy: number, medium: number, hard: number },
@@ -215,23 +243,58 @@ export const generateQuizImage = async (
 
 export const generateQuizAudio = async (
     text: string, 
-    voiceName: string = 'Fenrir', 
-    style: string = '', 
-    pace: string = 'Normal',
-    pitch: string = 'Medium'
-): Promise<ArrayBuffer> => {
+    provider: 'Gemini' | 'ElevenLabs' = 'Gemini',
+    config: { 
+        voiceName?: string, 
+        elevenLabsKey?: string,
+        elevenLabsModel?: string,
+        style?: string, 
+        pace?: string, 
+        pitch?: string 
+    } = {}
+): Promise<{ buffer: ArrayBuffer, format: 'pcm' | 'mp3' }> => {
   if (!text) throw new Error("Text is required for audio generation");
   
   return withRetry(async () => {
+    
+    // 1. ELEVENLABS PATH
+    if (provider === 'ElevenLabs') {
+        if (!config.elevenLabsKey) throw new Error("ElevenLabs API Key is required");
+
+        // Voice ID Mapping
+        const elevenLabsVoices: Record<string, string> = {
+          'Adam': 'pNInz6obpgDQGcFmaJgB',   // Deep Male
+          'Antoni': 'ErXwobaYiN019PkySvjV', // Balanced Male
+          'Josh': 'TxGEqnHWrfWFTfGW9XjX',   // Deep Storyteller
+          'Rachel': '21m00Tcm4TlvDq8ikWAM', // American Female
+          'Nicole': 'piTKgcLEGmPE4e6mEKli'  // Whispering Female
+        };
+
+        let voiceId = elevenLabsVoices['Adam']; // Default
+        if (config.voiceName && elevenLabsVoices[config.voiceName]) {
+            voiceId = elevenLabsVoices[config.voiceName];
+        } 
+        // Fallback for Gemini voice names if user switches provider without changing voice
+        else if (config.voiceName === 'Fenrir') voiceId = elevenLabsVoices['Adam'];
+        else if (config.voiceName === 'Puck') voiceId = elevenLabsVoices['Antoni'];
+        else if (config.voiceName === 'Charon') voiceId = elevenLabsVoices['Josh'];
+        else if (config.voiceName === 'Kore') voiceId = elevenLabsVoices['Rachel'];
+        else if (config.voiceName === 'Aoede') voiceId = elevenLabsVoices['Nicole'];
+
+        const buffer = await generateElevenLabsAudio(text, config.elevenLabsKey, voiceId, config.elevenLabsModel);
+        return { buffer, format: 'mp3' };
+    }
+
+    // 2. GEMINI PATH
     const ai = getClient();
     
     // Construct a prompt instruction for the model
     let instruction = "";
-    if (style || pace !== 'Normal' || pitch !== 'Medium') {
+    if (config.style || (config.pace && config.pace !== 'Normal') || (config.pitch && config.pitch !== 'Medium')) {
         const parts = [];
-        if (style) parts.push(`in a ${style} tone`);
-        if (pace !== 'Normal') parts.push(`speaking ${pace.toLowerCase()}`);
-        if (pitch !== 'Medium') parts.push(`with a ${pitch.toLowerCase()} pitch`);
+        if (config.style) parts.push(`in a ${config.style} tone`);
+        if (config.pace && config.pace !== 'Normal') parts.push(`speaking ${config.pace?.toLowerCase()}`);
+        if (config.pitch && config.pitch !== 'Medium') parts.push(`with a ${config.pitch?.toLowerCase()} pitch`);
         instruction = `Say ${parts.join(' and ')}: `;
     }
     
@@ -246,7 +309,7 @@ export const generateQuizAudio = async (
         responseModalities: [Modality.AUDIO],
         speechConfig: {
           voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: voiceName } 
+            prebuiltVoiceConfig: { voiceName: config.voiceName || 'Fenrir' } 
           }
         }
       }
@@ -262,7 +325,7 @@ export const generateQuizAudio = async (
     for (let i = 0; i < len; i++) {
       bytes[i] = binaryString.charCodeAt(i);
     }
-    return bytes.buffer;
+    return { buffer: bytes.buffer, format: 'pcm' };
   }, 4, 3000); // 4 retries, starting delay 3s
 };
 
